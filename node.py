@@ -1,53 +1,48 @@
 import socket
 import random
 from threading import Thread, Lock
-from utils import GossipMessage, IncorrectMessageFormat, create_messages, decode_message, IncorrectMessageFormat
+from utils import *
+
 
 class GossipNode:
-  """ A GossipNode that implements the simple Gossip protocol by connecting to 
-    peers on a P2P network and propagating/receiving messages to peers.
-    
-    Attributes:
-      data
-      port
-      ip_addres
-      node_id
-      peer_list
-      peer_connections
-      database
-      messages
-    """
+  """ A node that connects to peers on a P2P networks and propagates and receives 
+    updates based on a simple gossip protocol.
+  """
+
   def __init__(self, data, port, peers):
+    """ Constructor for GossipNode.
+    
+      Attributes:
+        data: a filepath containing data of "updates" that this node wants to propagate.
+        ip_address: the ip address that this node is running on.
+        port: the port that this node is running on.
+        node_id: an identifier for this node in the format ip_address:port.
+        peer_list: a string list of peers where peers are in the format node_ids. 
+        database: a list of "updates" that this node has merged into its database.
+        messages: a pool of messages this node is attempting to propate to peers on the network.
+    """
     self.data = data
+    self.ip_address = '127.0.0.1' # should be configurable
     self.port = port
-    self.ip_address = '127.0.0.1'
     self.node_id = f'{self.ip_address}:{self.port}'
     self.peer_list = peers   
     self.__database = []
+    self.__messages = create_messages(data, 5, self.node_id)
     self.__receiver_connections = [] 
     self.__sender_connections = {}
-    self.__messages = create_messages(data, 5, self.node_id)
-    self.connected = False
-    self.connections = 0
     self.__msg_lock = Lock()
 
   def run(self):
-    # ---- TESTING THAT CONNECTIONS ARE MADE ---- #
     # bootstrap the network
-    client = Thread(target=self.__establish_connections) # attempts to connect to peers
-    server = Thread(target=self.__receive_connections) # listens for connections from peers
+    client = Thread(target=self.__establish_connections)
+    server = Thread(target=self.__receive_connections)
     client.start()
     server.start()
     
     client.join()
     server.join()
-    # for peer, connection in self.__sender_connections.items():
-    #   print(peer)
-    #   print(connection)
-    # for client_socket in self.__receiver_connections:
-    #   print(client_socket)
-    # ---- END TESTING CONNECTIONS--------------- #
 
+    # begin sending and receiving messages
     threads = []
     for client_socket in self.__receiver_connections:
       rec = Thread(target=self.__receive, args=(client_socket,))
@@ -59,10 +54,23 @@ class GossipNode:
     
     threads = [t.join() for t in threads]
 
+    # output merged data
+    self.__output()
+
   def __output(self):
-    pass
-      
+    """ Prints and outputs all data this node has merged from the network to a 
+      a .txt file.
+    """
+    with open(f'data/{self.node_id}.txt', 'w') as f:
+      for data in self.__database:
+        print(data)
+        f.write(data)
+      f.close()
+
   def __establish_connections(self):
+    """ Attempts to establish connections to all peers in peer_list. Terminates 
+      once a connection has been made to every peer.
+    """
     connected = False
     while not connected:
       connections = 0
@@ -109,12 +117,9 @@ class GossipNode:
           elif cnt > 0:
             cnt -= 1
             self.__messages[uuid] = msg, cnt
-            receiving_peers = self.peer_list # eventually change to random
-            print(receiving_peers)
+            receiving_peers = self.peer_list # eventually change to random selection of peers
             for peer in receiving_peers:
-              # get the connection with that peer
               connection = self.__sender_connections[peer]
-              # create message, encode, and send
               try:
                 message = uuid + '|' + msg.node_id + '|' + msg.data + '\n'
                 connection.sendall(message.encode('utf-8'))
