@@ -30,7 +30,7 @@ def create_messages(filepath, k, node_id):
     for line in lines[1:]:
       uuid = (''.join(random.choice(string.ascii_letters) for x in range(4))).upper()
       node_id: node_id
-      data = line
+      data = line.replace('\n', '')
       message = GossipMessage(uuid, node_id, data)
       messages[uuid] = message, k
   return messages

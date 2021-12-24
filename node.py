@@ -3,12 +3,12 @@ import random
 from threading import Thread, Lock
 from utils import *
 
+MESSAGE_COUNT=300
 
 class GossipNode:
   """ A node that connects to peers on a P2P networks and propagates and receives 
     updates based on a simple gossip protocol.
   """
-
   def __init__(self, data, port, peers):
     """ Constructor for GossipNode.
     
@@ -27,12 +27,15 @@ class GossipNode:
     self.node_id = f'{self.ip_address}:{self.port}'
     self.peer_list = peers   
     self.__database = []
-    self.__messages = create_messages(data, 5, self.node_id)
+    self.__messages = create_messages(data, MESSAGE_COUNT, self.node_id)
     self.__receiver_connections = [] 
     self.__sender_connections = {}
     self.__msg_lock = Lock()
 
   def run(self):
+    # print current database
+    self.__output()
+
     # bootstrap the network
     client = Thread(target=self.__establish_connections)
     server = Thread(target=self.__receive_connections)
@@ -45,10 +48,10 @@ class GossipNode:
     # begin sending and receiving messages
     threads = []
     for client_socket in self.__receiver_connections:
-      rec = Thread(target=self.__receive, args=(client_socket,))
+      rec = Thread(target=self.__receive_messages, args=(client_socket,))
       rec.start()
       threads.append(rec)
-    sender = Thread(target=self.__send)
+    sender = Thread(target=self.__send_messages)
     sender.start()
     threads.append(sender)
     
@@ -61,10 +64,12 @@ class GossipNode:
     """ Prints and outputs all data this node has merged from the network to a 
       a .txt file.
     """
+    self.__database.sort()
     with open(f'data/{self.node_id}.txt', 'w') as f:
       for data in self.__database:
         print(data)
         f.write(data)
+        f.write('\n')
       f.close()
 
   def __establish_connections(self):
@@ -105,47 +110,54 @@ class GossipNode:
     except OSError as os_error:
       print(os_error)
 
-  def __send(self): 
-    print('%s | Start sending messages to peers.' % (self.port))
-    while True: # need to create termination condition(empty messages isn't stable)
-      if self.__messages:
-        self.__msg_lock.acquire()
-        for uuid, (msg, cnt) in self.__messages.items():
-          if cnt == 0:
-            self.__database.append(msg.data)
-            self.__messages[uuid] = msg, -1
-          elif cnt > 0:
-            cnt -= 1
-            self.__messages[uuid] = msg, cnt
-            receiving_peers = self.peer_list # eventually change to random selection of peers
-            for peer in receiving_peers:
-              connection = self.__sender_connections[peer]
-              try:
-                message = uuid + '|' + msg.node_id + '|' + msg.data + '\n'
-                connection.sendall(message.encode('utf-8'))
-                print('%s | Sent message %s to %s' % (self.port, msg.uuid, peer))
-              except:
-                print('%s | Could not send message %s to %s' % (self.port, msg.uuid, peer))
-        self.__msg_lock.release() 
+  def __send_messages(self): 
+    while not self.__terminate():
+      self.__msg_lock.acquire()
+      for uuid, (msg, cnt) in self.__messages.items():
+        if cnt == 0:
+          self.__database.append(msg.data)
+          self.__messages[uuid] = msg, -1
+        elif cnt > 0:
+          cnt -= 1
+          self.__messages[uuid] = msg, cnt
+          message = uuid + '|' + msg.node_id + '|' + msg.data + '\n'
+          receiving_peers = random.sample(self.peer_list, random.randint(1, len(self.peer_list) -1))
+          for peer in receiving_peers:
+            connection = self.__sender_connections[peer]
+            try:
+              connection.sendall(message.encode('utf-8'))
+              print('%s | Sent message %s to %s' % (self.port, msg.uuid, peer))
+            except:
+              print('%s | Could not send message %s to %s' % (self.port, msg.uuid, peer))
+      self.__msg_lock.release()
 
-  def __receive(self, client_socket):
-    print('%s | Starting to LISTEN for messages from %s.' % (self.port, client_socket.gethostname()))
+  def __receive_messages(self, client_socket):
     stream = ""
-    while True:
+    while not self.__terminate():
       data = client_socket.recv(32)
       if '\n' in data.decode():
         eom = data.decode().split('\n')
         try:
           msg = decode_message(stream + eom[0])
-          print('%s | Received the following message from %s:' % (self.port, client_socket.gethostname()))
+          print('%s | Received the following message:' % (self.port))
           print(stream + eom[0])
           self.__msg_lock.acquire()
           if msg.uuid not in self.__messages.keys():
-            self.__messages[msg.uuid] = msg, 5
+            self.__messages[msg.uuid] = msg, MESSAGE_COUNT
           self.__msg_lock.release()
         except IncorrectMessageFormat:
           pass
         stream = eom[2].lstrip()  if len(eom) > 2 else ""
       else:
         stream += data.decode()
+    
+  def __terminate(self):
+    terminate = True
+    self.__msg_lock.acquire()
+    for _, (_, cnt) in self.__messages.items():
+      if cnt != -1:
+        terminate = False
+    self.__msg_lock.release()
+    return terminate
+
 
